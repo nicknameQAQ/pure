@@ -101,7 +101,7 @@ try {
   await idle()
   await page.locator('.ProseMirror > p').first().click()
   await poll(async () => await page.locator('.focus-mode .ProseMirror > .focus-active').count() === 1, 'active paragraph')
-  assert.ok(Number(await page.locator('.ProseMirror > h1').evaluate(node => getComputedStyle(node).opacity)) < 1)
+  await poll(async () => Number(await page.locator('.ProseMirror > h1').evaluate(node => getComputedStyle(node).opacity)) < .5, 'focus opacity transition')
   await page.keyboard.press('F9')
   await idle()
   await page.locator('.typewriter-mode').waitFor()
