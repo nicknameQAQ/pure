@@ -1,0 +1,138 @@
+import assert from 'node:assert/strict'
+import { _electron as electron } from 'playwright'
+import { promises as fs } from 'node:fs'
+import { join, resolve } from 'node:path'
+
+const root = resolve('test-results', `workspace-${Date.now()}`)
+const notes = join(root, '工作空间 中文')
+const sub = join(notes, '子目录 有空格')
+await fs.mkdir(sub, { recursive: true })
+await fs.writeFile(join(notes, '已有笔记.md'), '# 已有笔记\n\n保留的内容。')
+const env = { ...process.env, PURE_USER_DATA_DIR: join(root, 'profile') }
+delete env.ELECTRON_RUN_AS_NODE
+let app, page
+const checks = [], errors = []
+const pass = message => { checks.push(message); console.log(`PASS ${message}`) }
+async function poll(fn, label) { for (let i = 0; i < 150; i++) { if (await fn()) return; await new Promise(r => setTimeout(r, 80)) } throw new Error('Timed out: ' + label) }
+async function idle() { await poll(async () => await page.locator('.app').getAttribute('aria-busy') === 'false', 'idle') }
+async function launch() {
+  const executablePath = process.env.PURE_TEST_EXECUTABLE || process.env.SUJIAN_TEST_EXECUTABLE
+  app = await electron.launch({ ...(executablePath ? { executablePath } : {}), args: executablePath ? [] : ['.'], cwd: process.cwd(), env })
+  page = await app.firstWindow()
+  page.on('pageerror', error => errors.push(error.message))
+  await page.locator('.ProseMirror').waitFor()
+}
+async function dialogs(open = notes, response = 1, canceled = false) {
+  await app.evaluate(({ dialog }, data) => {
+    dialog.showOpenDialog = async () => ({ canceled: data.canceled, filePaths: data.canceled ? [] : [data.open] })
+    dialog.showMessageBox = async () => ({ response: data.response })
+  }, { open, response, canceled })
+}
+const plus = () => page.getByRole('button', { name: '新建文档', exact: true }).click()
+const title = name => page.locator('.document-title').filter({ hasText: name }).waitFor()
+async function width(value) { await poll(async () => Math.abs((await page.locator('.sidebar').boundingBox()).width - value) <= 1, `width ${value}`) }
+async function drag(delta) {
+  const box = await page.getByRole('separator', { name: '调整侧栏宽度' }).boundingBox()
+  await page.mouse.move(box.x + box.width / 2, box.y + 200)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width / 2 + delta, box.y + 200, { steps: 15 })
+  await page.mouse.up()
+}
+try {
+  await launch()
+  assert.ok((await page.locator('.titlebar-brand').innerText()).includes('pure'))
+  await dialogs(notes, 1, true)
+  await plus(); await idle()
+  assert.equal(await page.locator('.folder-label').count(), 0)
+  assert.equal((await fs.readdir(sub)).length, 0)
+  pass('没有目录时先选择目录，取消不创建文件')
+  await dialogs()
+  await page.getByRole('button', { name: '打开文件夹', exact: true }).first().click()
+  await page.getByRole('button', { name: '子目录 有空格', exact: true }).click()
+  await plus(); await title('未命名.md'); await idle()
+  await poll(async () => await page.locator('.tree-entry.selected').getAttribute('title') === join(sub, '未命名.md'), 'new file visible')
+  assert.equal(await fs.readFile(join(sub, '未命名.md'), 'utf8'), '')
+  await page.keyboard.press('Control+n'); await title('未命名 (2).md'); await idle()
+  assert.equal(await fs.readFile(join(sub, '未命名 (2).md'), 'utf8'), '')
+  pass('跟随文件树当前目录立即落盘，自动编号、展开并高亮新文件')
+  await page.locator('.ProseMirror').click()
+  await page.keyboard.insertText('重命名和调整宽度后仍保留的编辑内容')
+  await page.evaluate(() => { window.__editorNode = document.querySelector('.ProseMirror') })
+  await page.keyboard.press('F2')
+  await page.getByRole('textbox', { name: '文件名', exact: true }).fill('未命名.md')
+  await page.keyboard.press('Enter'); await idle()
+  await page.getByRole('status').filter({ hasText: '已有同名文件' }).waitFor()
+  await page.getByRole('textbox', { name: '文件名', exact: true }).fill('我的 记录')
+  await page.keyboard.press('Enter'); await title('我的 记录.md'); await idle()
+  assert.equal(await fs.readFile(join(sub, '我的 记录.md'), 'utf8'), '')
+  assert.ok((await page.locator('.ProseMirror').innerText()).includes('重命名和调整宽度'))
+  assert.equal(await page.evaluate(() => window.__editorNode === document.querySelector('.ProseMirror')), true)
+  await page.locator('.ProseMirror').click()
+  await page.keyboard.press('Control+z')
+  await poll(async () => !(await page.locator('.ProseMirror').innerText()).includes('重命名和调整宽度'), 'undo after rename')
+  await page.keyboard.press('Control+Shift+z')
+  await poll(async () => (await page.locator('.ProseMirror').innerText()).includes('重命名和调整宽度'), 'redo after rename')
+  pass('F2 重命名拒绝覆盖，保留未保存内容、编辑器实例及撤销历史')
+  await width(256)
+  await drag(120); await width(376)
+  await poll(async () => (await page.evaluate(() => window.desktop.settings())).value.sidebarWidth === 376, 'persist width')
+  assert.equal(await page.evaluate(() => window.__editorNode === document.querySelector('.ProseMirror')), true)
+  await drag(-800); await width(180)
+  await drag(900); await width(600)
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(700, 820))
+  await poll(() => page.evaluate(() => document.querySelector('.sidebar').getBoundingClientRect().width <= innerWidth - 360 + 1), 'responsive clamp')
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1180, 820))
+  await width(600)
+  await page.getByRole('separator', { name: '调整侧栏宽度' }).dblclick(); await width(256)
+  await page.getByRole('separator', { name: '调整侧栏宽度' }).focus()
+  await page.keyboard.press('ArrowLeft'); await width(246)
+  await poll(async () => (await page.evaluate(() => window.desktop.settings())).value.sidebarWidth === 246, 'keyboard persist')
+  pass('拖动边界、窄窗口夹取、双击复位、键盘微调，调整时不重建编辑器')
+  await dialogs(notes, 2)
+  const before = await fs.readdir(sub)
+  await plus(); await idle()
+  assert.deepEqual(await fs.readdir(sub), before)
+  await title('我的 记录.md')
+  pass('新建前未保存提示选择取消，不产生多余文件')
+  await page.getByRole('button', { name: '保存', exact: true }).click()
+  await poll(async () => (await fs.readFile(join(sub, '我的 记录.md'), 'utf8')).includes('重命名和调整宽度'), 'save renamed')
+  await page.getByRole('textbox', { name: '筛选文件', exact: true }).fill('不会匹配')
+  await dialogs()
+  await plus(); await title('未命名 (2).md'); await idle()
+  assert.equal(await page.getByRole('textbox', { name: '筛选文件', exact: true }).inputValue(), '')
+  pass('新建清除隐藏筛选，编号复用空缺而不覆盖已有笔记')
+  const unavailable = join(notes, '将被删除')
+  await fs.mkdir(unavailable)
+  await page.getByRole('button', { name: '将被删除', exact: true }).waitFor()
+  await page.getByRole('button', { name: '将被删除', exact: true }).click()
+  await fs.rmdir(unavailable)
+  await plus(); await idle()
+  await title('未命名 (2).md')
+  assert.equal((await fs.readdir(sub)).length, 3)
+  pass('选中目录被外部删除时创建失败，保留当前文档')
+  const many = join(root, '千文件目录')
+  await fs.mkdir(many)
+  for (let offset = 0; offset < 1000; offset += 50) await Promise.all(Array.from({ length: 50 }, (_, i) => fs.writeFile(join(many, `${String(offset + i).padStart(4, '0')}.md`), '# 大目录验证\n\n文件内容。')))
+  await dialogs(many)
+  await page.getByRole('button', { name: '打开文件夹', exact: true }).first().click(); await idle()
+  await page.keyboard.press('Control+p')
+  await page.getByRole('textbox', { name: '快速打开文件', exact: true }).fill('0999')
+  await page.getByRole('option').filter({ hasText: '0999.md' }).waitFor()
+  await page.keyboard.press('Enter'); await title('0999.md'); await idle()
+  await poll(async () => await page.locator('.tree-entry.selected').getAttribute('title') === join(many, '0999.md'), 'virtual selected row')
+  assert.ok(await page.locator('.tree-entry').count() < 100)
+  await plus(); await title('未命名.md'); await idle()
+  await poll(async () => await page.locator('.tree-entry.selected').getAttribute('title') === join(many, '未命名.md'), 'virtual new file')
+  pass('千文件目录按需显示可见行，快速打开和新建均能定位屏幕外文件')
+  await page.screenshot({ path: join(root, 'workspace.png') })
+  await app.evaluate(({ app }) => app.exit(0)); app = undefined
+  await launch(); await width(246)
+  assert.equal(errors.length, 0, errors.join('\n'))
+  pass('侧栏宽度重启恢复，渲染进程无异常')
+  await fs.writeFile(join(root, 'results.json'), JSON.stringify({ root, checks, errors }, null, 2))
+  console.log(`WORKSPACE_RESULTS ${root}`)
+} catch (error) {
+  await page?.screenshot({ path: join(root, 'failure.png') }).catch(() => {})
+  await fs.writeFile(join(root, 'failure.json'), JSON.stringify({ error: String(error), stack: error.stack, checks, errors }, null, 2))
+  throw error
+} finally { if (app) await app.evaluate(({ app }) => app.exit(0)).catch(() => {}) }

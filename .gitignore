@@ -1,0 +1,8 @@
+node_modules/
+out/
+release/
+dist-app/
+.npm-cache/
+.cache/
+test-results/
+*.log
