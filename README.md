@@ -62,7 +62,7 @@
 
 ## 本地构建
 
-Node.js 24，依赖由 `package-lock.json` 固定。
+Node.js 24.9.0 / npm 11.6.0，依赖由 `package-lock.json` 固定。
 
 ```powershell
 npm ci
