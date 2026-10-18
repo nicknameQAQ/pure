@@ -19,6 +19,8 @@ async function launch() {
   const executablePath = process.env.PURE_TEST_EXECUTABLE || process.env.SUJIAN_TEST_EXECUTABLE
   app = await electron.launch({ ...(executablePath ? { executablePath } : {}), args: executablePath ? [] : ['.'], cwd: process.cwd(), env })
   page = await app.firstWindow()
+  await app.evaluate(({ BrowserWindow }) => { const win = BrowserWindow.getAllWindows()[0]; win.show(); win.focus(); win.webContents.focus() })
+  await page.bringToFront()
   page.on('pageerror', error => errors.push(error.message))
   await page.locator('.ProseMirror').waitFor()
 }

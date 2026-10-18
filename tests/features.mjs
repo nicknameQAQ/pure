@@ -31,6 +31,8 @@ async function count(value) { await poll(async () => (await page.locator('.find-
 async function launch() {
   app = await electron.launch({ ...(executablePath ? { executablePath } : {}), args: executablePath ? [] : ['.'], cwd: process.cwd(), env, timeout: 30000 })
   page = await app.firstWindow()
+  await app.evaluate(({ BrowserWindow }) => { const win = BrowserWindow.getAllWindows()[0]; win.show(); win.focus(); win.webContents.focus() })
+  await page.bringToFront()
   page.on('pageerror', error => errors.push(error.message))
   await page.locator('.ProseMirror').waitFor()
 }

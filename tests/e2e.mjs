@@ -31,6 +31,8 @@ async function launch() {
   const executablePath = process.env.PURE_TEST_EXECUTABLE || process.env.SUJIAN_TEST_EXECUTABLE
   app = await electron.launch({ ...(executablePath ? { executablePath } : {}), args: executablePath ? [] : ['.'], cwd: process.cwd(), env, timeout: 30000 })
   page = await app.firstWindow()
+  await app.evaluate(({ BrowserWindow }) => { const win = BrowserWindow.getAllWindows()[0]; win.show(); win.focus(); win.webContents.focus() })
+  await page.bringToFront()
   page.on('pageerror', error => errors.push(error.message))
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
   await page.locator('.ProseMirror').waitFor({ timeout: 30000 })
@@ -106,6 +108,7 @@ try {
   await page.keyboard.press('Control+/')
   await rich()
   assert.ok((await page.locator('.ProseMirror').innerText()).includes('即时编辑的中文段落'))
+  await page.locator('.ProseMirror > p').last().click()
   await page.keyboard.press('Control+s')
   await poll(async () => (await fs.readFile(file, 'utf8')).includes('即时编辑的中文段落'), 'save')
   const bytes = await fs.readFile(file)
